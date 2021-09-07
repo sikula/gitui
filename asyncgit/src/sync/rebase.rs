@@ -112,13 +112,17 @@ pub fn abort_rebase(repo: &git2::Repository) -> Result<()> {
 
 #[cfg(test)]
 mod test_conflict_free_rebase {
-	use crate::sync::{
-		checkout_branch, create_branch,
-		rebase::conflict_free_rebase,
-		tests::{repo_init, write_commit_file},
-		utils, CommitId,
+	use crate::{
+		error::Result,
+		sync::{
+			checkout_branch, create_branch, repo_state,
+			tests::{repo_init, write_commit_file},
+			utils, CommitId, RepoState,
+		},
 	};
 	use git2::{BranchType, Repository};
+
+	use super::conflict_free_rebase;
 
 	fn parent_ids(repo: &Repository, c: CommitId) -> Vec<CommitId> {
 		let foo = repo
@@ -135,17 +139,17 @@ mod test_conflict_free_rebase {
 	fn test_rebase_branch_repo(
 		repo_path: &str,
 		branch_name: &str,
-	) -> CommitId {
-		let repo = utils::repo(repo_path).unwrap();
+	) -> Result<CommitId> {
+		let repo = utils::repo(repo_path)?;
 
 		let branch =
-			repo.find_branch(branch_name, BranchType::Local).unwrap();
+			repo.find_branch(branch_name, BranchType::Local)?;
 
-		let annotated = repo
-			.reference_to_annotated_commit(&branch.into_reference())
-			.unwrap();
+		let annotated = repo.reference_to_annotated_commit(
+			&branch.into_reference(),
+		)?;
 
-		conflict_free_rebase(&repo, &annotated).unwrap()
+		conflict_free_rebase(&repo, &annotated)
 	}
 
 	#[test]
@@ -171,9 +175,34 @@ mod test_conflict_free_rebase {
 
 		checkout_branch(repo_path, "refs/heads/foo").unwrap();
 
-		let r = test_rebase_branch_repo(repo_path, "master");
+		let r = test_rebase_branch_repo(repo_path, "master").unwrap();
 
 		assert_eq!(parent_ids(&repo, r), vec![c3]);
+	}
+
+	#[test]
+	fn test_conflict() {
+		let (_td, repo) = repo_init().unwrap();
+		let root = repo.path().parent().unwrap();
+		let repo_path = root.as_os_str().to_str().unwrap();
+
+		write_commit_file(&repo, "test.txt", "test1", "commit1");
+
+		create_branch(repo_path, "foo").unwrap();
+
+		write_commit_file(&repo, "test.txt", "test2", "commit2");
+
+		checkout_branch(repo_path, "refs/heads/master").unwrap();
+
+		write_commit_file(&repo, "test.txt", "test3", "commit3");
+
+		checkout_branch(repo_path, "refs/heads/foo").unwrap();
+
+		let res = test_rebase_branch_repo(repo_path, "master");
+
+		assert!(res.is_err());
+
+		assert_eq!(repo_state(repo_path).unwrap(), RepoState::Clean);
 	}
 }
 
